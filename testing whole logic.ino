@@ -44,7 +44,7 @@ void showNewData() {
 
 //============
 
-        // this function is called by the Wire library when a message is received
+// this function is called by the Wire library when a message is received
 void receiveEvent(int numBytesReceived) {
 
     if (newRxData == false) {
