@@ -12,6 +12,53 @@
 long last_time;
 long last_time_us = 0;
 
+//for receive sick dt35 data
+struct I2cRxStruct {
+          float  Distance;
+          byte padding[10];
+  //------
+
+};
+
+I2cRxStruct rxData;
+
+bool newRxData = false;
+
+
+        // I2C control stuff
+#include <Wire.h>
+
+const byte thisAddress = 0x09; // these need to be swapped for the other Arduino
+//Default SDA port = gpio21
+//Default SCL port = gpio22
+//=================================
+//=============
+
+void showNewData() {
+
+    Serial.print("Distance: ");
+    Serial.print(rxData.Distance);
+    Serial.println(' ');
+
+}
+
+//============
+
+        // this function is called by the Wire library when a message is received
+void receiveEvent(int numBytesReceived) {
+
+    if (newRxData == false) {
+            // copy the data to rxData
+        Wire.readBytes( (byte*) &rxData, numBytesReceived);
+        newRxData = true;
+    }
+    else {
+            // dump the data
+        while(Wire.available() > 0) {
+            byte c = Wire.read();
+        }
+    }
+}
 // Rm_set motors;
 // int carbase_stage = 1;
 // int CarBase_RotationReduction = 6.5;  // Can Change 
@@ -50,8 +97,8 @@ long last_time_us = 0;
 const float HEIGHT_PASSIVE = 1200;
 const float HEIGHT_MOVING = 1000;
 float x = 0;
-bool passive_pole = false;
-bool moving_pole = false;
+bool passive_mode = false;
+bool moving_mode = false;
 
 // =============== PS4 Controller ===============
 #define JOYSTICK_DEADZONE 15
@@ -204,17 +251,6 @@ void shoot_shooter(){
 
 // }
 
-const int dt35Pin = 34;  // 接 DT35 analog 輸出的 GPIO pin
-const float VREF = 3.3;    // ESP32 的 ADC 參考電壓
-const uint16_t ADC_RESOLUTION = 4095; // ESP32 是 12-bit ADC
-
-
-
-// Convert raw sensor data to mm (we will update with your real calibration later)
-float convertRawToDistance(int raw_value) {
-  // Placeholder linear mapping: real formula needs calibration
-  return map(raw_value, 5, 648, 20, 6500);  // map raw 5-648 to 20-6500 mm
-}
 
 // Calculate angle to shoot
 float calculateShootAngle(float x_mm, float y_mm) {
@@ -238,7 +274,10 @@ void setup() {
   CAN0.begin(1000000);
   CAN0.watchFor();
   CAN0.setGeneralCallback(can0_callback);
-
+      
+  // set up I2C
+  Wire.begin(thisAddress); // join i2c bus
+  Wire.onReceive(receiveEvent); // register event
   // PS4 controller
   PS4.attach(notify);
   PS4.attachOnConnect(onConnect);
@@ -246,7 +285,7 @@ void setup() {
   PS4.begin("0a:0a:0a:0a:0a:0a");  
 
   myServo.attach(SERVO_PIN);
-  myServo.write(0);
+  myServo.write(90);
 
 // xTaskCreatePinnedToCore(
 //     task_cantx,  // Function that should be called
@@ -285,9 +324,11 @@ void loop() {
   //delay(10); // this speeds up the simulation
   // carbase.tick(micros());
   // mech_driver.getMovement(carbase_motor_rpm, carbase.current_v[0], carbase.current_v[1], carbase.current_w);
-  int raw = analogRead(dt35Pin);
-  float x = convertRawToDistance(raw);//will change later, the table not yet finish
-  
+ if (newRxData == true) {
+        //showNewData();
+        newRxData = false;
+  }
+   
   if(PS4.Right() == true){
       passive_mode = true;
       moving_mode = false;
@@ -296,8 +337,8 @@ void loop() {
       passive_mode = false;
       moving_mode = true;
   }  
-  if (passive_pole) {
-    float angle_deg = calculateShootAngle(x, HEIGHT_PASSIVE);
+  if (passive_mode) {
+    float angle_deg = calculateShootAngle(rxData.Distance, HEIGHT_PASSIVE);
     int servo_pos = angleToServo(angle_deg);
     myServo.write(servo_pos);
 
@@ -308,8 +349,8 @@ void loop() {
     passive_mode = false;
   }  
   
-  if (moving_pole) {
-    float angle_deg = calculateShootAngle(x, HEIGHT_MOVING);
+  if (moving_mode) {
+    float angle_deg = calculateShootAngle(rxData.Distance, HEIGHT_MOVING);
     int servo_pos = angleToServo(angle_deg);
     myServo.write(servo_pos);
 
