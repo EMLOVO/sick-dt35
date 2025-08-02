@@ -1,46 +1,3 @@
-// const int analogPin = A0;
-
-// // 用你实测的 near/far raw
-// const int RAW_MIN    = 119;   // 对应  2 cm
-// const int RAW_MAX    = 652;   // 对应 650 cm
-// const float DIST_MIN =   2.0; // cm
-// const float DIST_MAX = 650.0; // cm
-
-// void setup() {
-//   Serial.begin(115200);
-// }
-
-// void loop() {
-//   int raw = analogRead(analogPin);
-//   raw = constrain(raw, RAW_MIN, RAW_MAX);
-
-//   float distance = (raw - RAW_MIN)  
-//                  * (DIST_MAX - DIST_MIN)  
-//                  / float(RAW_MAX - RAW_MIN)  
-//                  + DIST_MIN;
-
-//   Serial.print("Raw = ");
-//   Serial.print(raw);
-//   Serial.print(" | Distance = ");
-//   Serial.print(distance, 1);
-//   Serial.println(" cm");
-
-//   delay(200);
-// }
-
-
-// const int DT35_PIN = A0;    
-  
-
-// void setup() {
-//   Serial.begin(115200);
-// }
-
-// void loop() {
-//   int raw = analogRead(DT35_PIN);
-//   Serial.println(raw);
-//   delay(500);
-// }
 struct I2cTxStruct {
   float  Distance;
   byte padding[10];
@@ -61,19 +18,17 @@ const byte otherAddress1 = 0x09; // address of Slave 1
 unsigned long prevUpdateTime = 0;
 unsigned long updateInterval = 150;
 
-// ———— 验证 raw→distance 拟合准确性 ————
-const int DT35_PIN = A0;     // Q2 分压后接 A0
+const int DT35_PIN = A0;
 
-// 拟合系数（从你的数据用二次回归算出）
 const float A = -3.11941934e-07;
 const float B =  1.26478998;
 const float C = -158.553317;
 float dist = 0.0;
 
-// 把 raw(ADC) 转成距离 (cm)
 float convertRawToDistance(int raw) {
-  float d = A * raw * raw + B * raw + C;
-  return (d > 0) ? d : 0;
+  float d_cm = A * raw * raw + B * raw + C;
+  float d = (d_cm > 0.0f) ? d_cm * 10.0f : 0.0f;//ensure not negative
+  return d;
 }
 
 void setup() {
@@ -112,7 +67,7 @@ void loop() {
   dist = convertRawToDistance(raw);
   // Serial.print(raw);
   // Serial.print('\t');
-  // Serial.println(dist, 1);    // 保留 1 位小数
+  // Serial.println(dist, 1);   
   // delay(500);
     // this function updates the data in txData
   updateDataToSend();
