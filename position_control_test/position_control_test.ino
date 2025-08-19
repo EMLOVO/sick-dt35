@@ -1,7 +1,7 @@
 #include "rm_set.h"
 #include <esp32_can.h>
 
-#define clamp 13
+#define lock 13
 #define sensor 32
 
 Rm_set motors;
@@ -20,7 +20,7 @@ void IRAM_ATTR ISR() {
 
 void find_home() {
   homing_stage = 1;
-  digitalWrite(clamp,HIGH);
+  digitalWrite(lock,HIGH);
 
 }
 
@@ -59,8 +59,8 @@ void can1_callback(CAN_FRAME *frame)
 void setup()
 {
   pinMode(sensor,INPUT);
-  pinMode(clamp,OUTPUT);
-  digitalWrite(clamp, LOW);
+  pinMode(lock,OUTPUT);
+  digitalWrite(lock, LOW);
   Serial.begin(115200);
   for (int i = 0; i < motors.MOTOR_NUM; i++) {
     motors.set_pid_rpm(i, 6, 0.01, 0); //set pid for each rm aqW22
@@ -103,3 +103,4 @@ void loop()
     send_rm_frame(); // 記得send番個rm frame
 
 }
+
