@@ -154,7 +154,7 @@ void send_rm_frame()
     tx_msg0.data.byte[i] = motors.can_msg0[i];
     tx_msg1.data.byte[i] = motors.can_msg1[i];
   }
-  .sendFrame(tx_msg0);
+  CAN0.sendFrame(tx_msg0);
   CAN0.sendFrame(tx_msg1);
   //delayMicroseconds(100);
 
