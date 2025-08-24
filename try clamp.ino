@@ -112,11 +112,11 @@ void send_rm_frame()
     tx_msg0.data.byte[i] = motors.can_msg0[i];
     tx_msg1.data.byte[i] = motors.can_msg1[i];
   }
-  CAN1.sendFrame(tx_msg0);
-  CAN1.sendFrame(tx_msg1);
+  CAN0.sendFrame(tx_msg0);
+  CAN0.sendFrame(tx_msg1);
 }
 
-void can1_callback(CAN_FRAME *frame)
+void can0_callback(CAN_FRAME *frame)
 {
     // rm motor feedback
     int rx_id = frame->id;
@@ -142,9 +142,9 @@ void setup()
     Serial.begin(115200);
 
     // set up CAN
-    CAN1.begin(1000000);
-    CAN1.watchFor();
-    CAN1.setGeneralCallback(can1_callback);
+    CAN0.begin(1000000);
+    CAN0.watchFor();
+    CAN0.setGeneralCallback(can0_callback);
     delay(50);
 
     // clamp pin
