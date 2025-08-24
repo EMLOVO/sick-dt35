@@ -1,5 +1,4 @@
 // Full integrated code: Wheels (CAN0) + Shooter & Clamp (CAN1) + PS4
-#include <Arduino.h>
 #include "MecanumWheelDriver.h"
 #include "rm_set.h"
 #include <esp32_can.h>
@@ -18,20 +17,18 @@ const int MAX_OUTPUT = 16384;
 const double MAX_SO = 1000.0;
 
 CAN_FRAME tx_msg, joy_feedback;
-extern ESP32CAN CAN0;
 bool CAN0_OK = false;
 
 // ---------------- CAN1 (Shooter + Reloader + Clamp) ----------------
-#define lockPin   12   // 電磁鎖
+#define lockPin   14   // 電磁鎖
 #define clampPin  13   // 夾爪輸出
 #define sensorPin 32   // homing 感測器
 #define LOCKED LOW
 #define UNLOCKED HIGH
-#define CLAMP_CLOSED_LEVEL LOW  // 夾爪 LOW 表示 closed（與你早先 clamp code 保持一致）
-#define CLAMP_OPEN_LEVEL   HIGH
+#define CLAMP_CLOSED_LEVEL HIGH  
+#define CLAMP_OPEN_LEVEL   LOW
 
 Rm_set motors;
-extern ESP32CAN CAN1;
 bool CAN1_OK = false;
 
 // Shooter vars (使用 motors index 0 為 shooter)
@@ -117,16 +114,25 @@ void can0_callback(CAN_FRAME *frame) {
 
 // ---------------- CAN1 (Shooter + Clamp) ----------------
 void send_rm_frame() {
-  if (!CAN1_OK) return;
-  CAN_FRAME tx;
-  tx.id = 0x200;
-  tx.length = 8;
-  for (int i=0; i<8; i++) tx.data.byte[i] = motors.can_msg0[i];
-  CAN1.sendFrame(tx);
+  //if rm id = 1-4 -> tx_msg0 (0x200)
+  //if rm id = 5-8 -> tx_msg1 (0x1FF)
+
+  CAN_FRAME tx_msg0;
+  CAN_FRAME tx_msg1;
+  tx_msg0.id = 0x200;
+  tx_msg0.length = 8;
+  tx_msg1.id = 0x1FF;
+  tx_msg1.length = 8;
+  for (int i = 0; i < 8; i++) {
+    tx_msg0.data.byte[i] = motors.can_msg0[i];
+    tx_msg1.data.byte[i] = motors.can_msg1[i];
+  }
+  CAN0.sendFrame(tx_msg0);
+  CAN0.sendFrame(tx_msg1);
+  //delayMicroseconds(100);
 }
 
 void can1_callback(CAN_FRAME *frame) {
-  if (!CAN1_OK) return;
   int rx_id = frame->id;
   // 更新 motor status（假設來自 0x201 起）
   motors.update_motor_status(rx_id - 0x201, micros(),
@@ -312,6 +318,12 @@ void notify() {
 
   // Triangle (index 5) 的 rising edge 會在 shooterLogic 處理 shot request
 }
+void find_home()
+{
+  homing_stage = 1;
+  state = STATE_HOMING;
+  Serial.println("find_home() called -> homing_stage set to 1");
+}
 
 // ---------------- Setup ----------------
 void setup() {
@@ -324,24 +336,13 @@ void setup() {
   clampClosed = false;
   lockState = UNLOCKED;
 
-  PS4.begin("01:02:03:04:05:06");
+  PS4.begin("a0:a0:a0:a0:a0:a0");
   PS4.attach(notify);
 
   // CAN0 (wheels)
-  CAN0_OK = CAN0.begin(1000000);
-  if (CAN0_OK) {
-    for (int i=0;i<MOTOR_NUM;i++) CAN0.watchFor(0x201+i);
-    CAN0.setGeneralCallback(can0_callback);
-    Serial.println("CAN0 started");
-  } else { Serial.println("CAN0 failed to start"); }
-
-  // CAN1 (shooter + reloader + clamp)
-  CAN1_OK = CAN1.begin(1000000);
-  if (CAN1_OK) {
-    CAN1.watchFor(); // 接收所有
-    CAN1.setGeneralCallback(can1_callback);
-    Serial.println("CAN1 started");
-  } else { Serial.println("CAN1 failed to start"); }
+  CAN0.begin(1000000);
+  CAN0.watchFor();
+  CAN0.setGeneralCallback(can0_callback);
 
   // init motors (設定 PID 並 reset gearbox pos)
   for (int i = 0; i < motors.MOTOR_NUM; i++) {
@@ -359,8 +360,7 @@ void setup() {
   }, FALLING);
 
   // 啟動 shooter homing
-  homing_stage = 1;
-  shooter_state = STATE_HOMING;
+  find_home();
   Serial.println("Setup complete. Shooter homing started.");
 }
 
