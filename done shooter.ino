@@ -154,13 +154,13 @@ void send_rm_frame()
     tx_msg0.data.byte[i] = motors.can_msg0[i];
     tx_msg1.data.byte[i] = motors.can_msg1[i];
   }
-  CAN1.sendFrame(tx_msg0);
-  CAN1.sendFrame(tx_msg1);
+  .sendFrame(tx_msg0);
+  CAN0.sendFrame(tx_msg1);
   //delayMicroseconds(100);
 
 }
 
-void can1_callback(CAN_FRAME *frame)
+void can0_callback(CAN_FRAME *frame)
 {
   int rx_id = frame->id;
   if (rx_id > 0x200 && rx_id < 0x209) {
@@ -221,9 +221,9 @@ void setup()
     motors.reset_gearbox_pos(i);
   }
 
-  CAN1.begin(1000000);
-  CAN1.watchFor();
-  CAN1.setGeneralCallback(can1_callback);
+  CAN0.begin(1000000);
+  CAN0.watchFor();
+  CAN0.setGeneralCallback(can0_callback);
 
   xTaskCreatePinnedToCore(
     task_cantx,  // Function that should be called
@@ -249,7 +249,7 @@ void start_return_via_sensor() {
   delay(10);
   returning_via_sensor = true;
   state = STATE_RETURNING_VIA_SENSOR;
-  find_home(); // sets homing_stage=1; can1_callback will drive toward sensor when frame arrives
+  find_home(); // sets homing_stage=1; can0_callback will drive toward sensor when frame arrives
 }
 
 void loop()
