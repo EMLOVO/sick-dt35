@@ -18,7 +18,8 @@ int press_list[16];
 
 volatile bool clampClosed = false;
 
-int pos = 120000;
+int pos_A = 120000;
+int pos_B = 90000;
 
 // latch flag: true after initial position recorded once from CAN feedback
 volatile bool homeLatched = false;
@@ -70,14 +71,14 @@ void notify()
   // Start load sequence: D-pad Up moves up relative to latched int_pos
   if (press_list[1] == 1 && clampClosed) {
     Serial.println("up!");
-    motors.set_target_pos(5, int_pos + pos);
+    motors.set_target_pos(5, int_pos + pos_A);
     up = true;
   }
 
   // D-pad Down moves back to latched int_pos (only if we previously went up)
   if (press_list[3] == 1 && up) {
     Serial.println("down!");
-    motors.set_target_pos(5, int_pos);
+    motors.set_target_pos(5, int_pos + pos_B);
     up = false;
   }
 }
