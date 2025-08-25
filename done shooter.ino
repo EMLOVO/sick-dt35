@@ -2,9 +2,12 @@
 #include <esp32_can.h>
 #include <PS4Controller.h>
 
+// CONFIG
 #define lock 13
 #define sensor 32
-#define POSITION_TOLERANCE 400L 
+#define POSITION_TOLERANCE 500L
+#define JOYSTICK_DEADZONE 12
+#define USE_RPM_FALLBACK 1 // set 0 to disable rpm fallback and rely only on position controller
 
 // clearer lock macros
 #define LOCKED LOW
@@ -22,12 +25,11 @@ volatile long initial_encoder = 0; // latched in CAN callback
 
 volatile bool shot_requested = false;
 bool shot_in_progress = false;
-// unsigned long shot_start_time = 0;
 unsigned long home_start_time = 0;
 
 int top = -400000; // keep your sign
-int last_time = 0;
-#define JOYSTICK_DEADZONE 12
+unsigned long last_time = 0UL; // use unsigned long for micros() comparisons
+
 int lx, ly, rx, ry;
 
 bool current_buttons[16];
@@ -53,6 +55,10 @@ long shot_target_pos = 0;
 // new: timestamp when entering STATE_UNLOCKED
 unsigned long unlock_time = 0;
 const unsigned long UNLOCK_AUTO_TIMEOUT = 2000UL; // 2 seconds
+
+// Forward declarations
+void send_rm_frame();
+void drive_toward_target_by_rpm(long target);
 
 void notify()
 {
@@ -90,20 +96,18 @@ void notify()
     press_list[i] = (int)current_buttons[i] - (int)last_buttons[i]; // -1 released, +1 pressed
   }
 
+  for (int i = 0; i < 16; i++) last_buttons[i] = current_buttons[i];
+
+  // --- Triangle pressed -> unlock (HIGH)  (press_list[5] per your mapping)
   if (press_list[5] && state == STATE_AT_SHOT_LOCKED) { // TRIANGLE rising edge
-    Serial.println(state);
-    digitalWrite(lock, UNLOCKED);
+    Serial.println("TRIANGLE pressed -> UNLOCK");
     lockState = UNLOCKED;
+    digitalWrite(lock, lockState);
     state = STATE_UNLOCKED;
     unlock_time = millis(); // start the 2-second timer
     Serial.println("TRIANGLE pressed: UNLOCK (lock HIGH). Starting 2s auto-return timer.");
     motors.set_target_rpm(4, 0); // optional: release PID so it won't fight manual motion
   }
-  
-  for (int i = 0; i < 16; i++) last_buttons[i] = current_buttons[i];
-
-    // --- Triangle pressed -> unlock (HIGH)  (press_list[5] per your mapping)
-
 }
 
 void onConnect() {
@@ -156,8 +160,6 @@ void send_rm_frame()
   }
   CAN0.sendFrame(tx_msg0);
   CAN0.sendFrame(tx_msg1);
-  //delayMicroseconds(100);
-
 }
 
 void can0_callback(CAN_FRAME *frame)
@@ -165,7 +167,7 @@ void can0_callback(CAN_FRAME *frame)
   int rx_id = frame->id;
   if (rx_id > 0x200 && rx_id < 0x209) {
     motors.update_motor_status(rx_id - 0x201, micros(), frame->data.uint8[0] << 8 | frame->data.uint8[1], frame->data.uint8[2] << 8 | frame->data.uint8[3]);
-  } 
+  }
 
   // while homing_stage==1, drive toward sensor (same behaviour as before)
   if (homing_stage == 1)
@@ -196,6 +198,8 @@ void can0_callback(CAN_FRAME *frame)
       state = STATE_HOMED_LOCKED;
       Serial.printf("HOMED (normal): initial_encoder=%ld -> LOCKED\n", initial_encoder);
     }
+
+    Serial.printf("CAN CB: latched initial_encoder=%ld gearbox_pos[4]=%ld\n", initial_encoder, motors.gearbox_pos[4]);
   }
 }
 
@@ -220,6 +224,10 @@ void setup()
     motors.set_pid_rpm(i, 6, 0.01, 0);
     motors.reset_gearbox_pos(i);
   }
+
+  // If your Rm_set library supports position PID, enable it here for motor 4
+  // Uncomment and tune if available:
+  // motors.set_pid_pos(4, 6, 0.01, 0);
 
   CAN0.begin(1000000);
   CAN0.watchFor();
@@ -252,55 +260,70 @@ void start_return_via_sensor() {
   find_home(); // sets homing_stage=1; can0_callback will drive toward sensor when frame arrives
 }
 
+void drive_toward_target_by_rpm(long target) {
+  long cur = motors.gearbox_pos[4];
+  long diff = (cur > target) ? (cur - target) : (target - cur);
+  if (diff <= POSITION_TOLERANCE) {
+    motors.set_target_rpm(4, 0);
+    shot_in_progress = false;
+    state = STATE_AT_SHOT_LOCKED;
+    Serial.println("Arrived at shot target (via rpm fallback).");
+    return;
+  }
+  // choose direction & rpm magnitude proportionally (clamp as needed)
+  int dir = (cur < target) ? 1 : -1;
+  int rpm = 1200 + (int)(diff / 1000); // simple mapping, tune limits
+  if (rpm > 3000) rpm = 3000;
+  motors.set_target_rpm(4, dir * rpm);
+}
+
 void loop()
 {
   if (micros() - last_time > 20000) {
     last_time = micros();
-  // debug prints -- once every 250 ms
-  // static unsigned long last_dbg = 0;
-  // if (millis() - last_dbg >= 250) {
-  //   long cur = motors.gearbox_pos[4];
-  //   Serial.printf("STATE=%d CUR=%ld INIT=%ld lock=%d returning_via_sensor=%d\n",
-  //                 (int)state, cur, initial_encoder, digitalRead(lock), (int)returning_via_sensor);
-  //   last_dbg = millis();
-  // }
 
-  // --- automatic move to shot after homed (unchanged)
-  if (shot_requested && !shot_in_progress && (millis() - home_start_time >= homed_Delay))
-  {
-    shot_target_pos = initial_encoder + top;
-    motors.set_target_pos(4, shot_target_pos);
-    // shot_start_time = millis();
-    shot_in_progress = true;
-    shot_requested = false;
-    state = STATE_MOVING_TO_SHOT;
-    Serial.printf("AUTO: Moving to shot target pos=%ld\n", shot_target_pos);
-  }
-
-  // monitor moving-to-shot arrival (inline abs diff)
-  if (state == STATE_MOVING_TO_SHOT) {
+    // debug prints -- once every ~20 ms loop tick
     long cur = motors.gearbox_pos[4];
-    long diff = (cur > shot_target_pos) ? (cur - shot_target_pos) : (shot_target_pos - cur);
-    if (diff <= POSITION_TOLERANCE) {
-      shot_in_progress = false;
-      state = STATE_AT_SHOT_LOCKED;
-      Serial.println("Arrived at shot target (locked state).");
-  }
-}
+    Serial.printf("STATE=%d CUR=%ld INIT=%ld lock=%d returning_via_sensor=%d\n",
+                  (int)state, cur, initial_encoder, digitalRead(lock), (int)returning_via_sensor);
 
-  // // --- Cross pressed -> immediate return via sensor (press_list[7])
-  // if (press_list[7] == 1) { // CROSS rising edge
-  //   Serial.println("CROSS pressed: immediate return via sensor requested");
-  //   start_return_via_sensor();
-  // }
-
-  // --- AUTO: if unlocked for >= 2s, start return via sensor
-  if (state == STATE_UNLOCKED) {
-    if ((millis() - unlock_time >= UNLOCK_AUTO_TIMEOUT) && !returning_via_sensor) {
-      Serial.println("STATE_UNLOCKED timeout reached -> auto starting return via sensor.");
-      start_return_via_sensor();
+    // --- automatic move to shot after homed
+    if (shot_requested && !shot_in_progress && (millis() - home_start_time >= homed_Delay))
+    {
+      shot_target_pos = initial_encoder + top;
+      motors.set_target_pos(4, shot_target_pos);
+      shot_in_progress = true;
+      shot_requested = false;
+      state = STATE_MOVING_TO_SHOT;
+      Serial.printf("AUTO: Moving to shot target pos=%ld\n", shot_target_pos);
     }
-  }
+
+    // monitor moving-to-shot arrival
+    if (state == STATE_MOVING_TO_SHOT) {
+      long cur = motors.gearbox_pos[4];
+      long diff = (cur > shot_target_pos) ? (cur - shot_target_pos) : (shot_target_pos - cur);
+      Serial.printf("MOVING: CUR=%ld TARGET=%ld DIFF=%ld\n", cur, shot_target_pos, diff);
+      if (diff <= POSITION_TOLERANCE) {
+        // arrived
+        motors.set_target_rpm(4, 0); // stop any velocity commands
+        shot_in_progress = false;
+        state = STATE_AT_SHOT_LOCKED;
+        Serial.println("Arrived at shot target (locked state).");
+      } else {
+#if USE_RPM_FALLBACK
+        // fallback drive if position mode isn't active or isn't working
+        drive_toward_target_by_rpm(shot_target_pos);
+#endif
+      }
+    }
+
+    // --- AUTO: if unlocked for >= 2s, start return via sensor
+    if (state == STATE_UNLOCKED) {
+      if ((millis() - unlock_time >= UNLOCK_AUTO_TIMEOUT) && !returning_via_sensor) {
+        Serial.println("STATE_UNLOCKED timeout reached -> auto starting return via sensor.");
+        start_return_via_sensor();
+      }
+    }
 
   }
 }
